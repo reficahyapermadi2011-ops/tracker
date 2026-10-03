@@ -1,7 +1,11 @@
 const crypto = require("crypto");
 
-const PASSWORD = "masuk123";   // ← ganti di sini kalau mau
-const SESSION_COOKIE = "sess";
+// ============================================================
+//  KUNCI RAHASIA — ganti jadi apapun yang lu mau.
+//  Dashboard cuma bisa dibuka lewat: /api/track/d/KUNCI_INI
+//  Minimal 12 karakter. Jangan ada spasi.
+// ============================================================
+const SECRET_KEY = "7kreppontop";
 
 // ---- storage ----
 let _store = null;
@@ -34,22 +38,18 @@ const html = (body, status = 200) => ({
   body,
 });
 
-// ---- ambil path dari event apapun bentuknya ----
 function extractPath(event) {
-  // coba beberapa sumber, ambil yang paling belakang setelah penanda
   const sources = [
     event.path || "",
     (event.headers && (event.headers["x-nf-original-path"] || event.headers["x-original-url"])) || "",
     event.rawUrl || "",
   ];
-
   for (const src of sources) {
     if (!src) continue;
     let s = src;
     if (s.includes("/api/track/")) return s.split("/api/track/").pop().split("?")[0];
     if (s.includes("/.netlify/functions/tracker/")) return s.split("/.netlify/functions/tracker/").pop().split("?")[0];
   }
-  // fallback: kalau event.path udah cuma "/login" atau "login"
   let p = (event.path || "").replace(/^\/+/, "");
   if (p.startsWith("api/track/")) p = p.slice("api/track/".length);
   return p.split("?")[0];
@@ -70,44 +70,6 @@ async function writeIndex(s, idx) {
   try {
     await s.set("index.json", JSON.stringify(idx));
   } catch (e) {}
-}
-
-function makeToken() {
-  const ts = Date.now().toString();
-  const sig = crypto.createHmac("sha256", PASSWORD).update(ts).digest("hex");
-  return ts + "." + sig;
-}
-
-function checkToken(tok) {
-  if (!tok) return false;
-  const parts = tok.split(".");
-  const ts = parts[0], sig = parts[1];
-  if (!ts || !sig) return false;
-  if (Date.now() - Number(ts) > 7 * 24 * 3600 * 1000) return false;
-  const expect = crypto.createHmac("sha256", PASSWORD).update(ts).digest("hex");
-  try {
-    if (sig.length !== expect.length) return false;
-    return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expect));
-  } catch (e) { return false; }
-}
-
-function parseCookies(header) {
-  const out = {};
-  (header || "").split(";").forEach(p => {
-    const i = p.indexOf("=");
-    if (i > 0) out[p.slice(0, i).trim()] = p.slice(i + 1).trim();
-  });
-  return out;
-}
-
-function isAuthed(event) {
-  const cookies = parseCookies(event.headers.cookie || event.headers.Cookie || "");
-  if (checkToken(cookies[SESSION_COOKIE])) return true;
-  try {
-    const url = new URL(event.rawUrl || "https://x" + event.path);
-    const qt = url.searchParams.get("token");
-    return checkToken(qt);
-  } catch (e) { return false; }
 }
 
 function crc32(buf) {
@@ -162,12 +124,8 @@ function toCSV(visits) {
 function pageError(msg) {
   return html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Error</title>
 <style>body{font:14px system-ui;background:#0e0e10;color:#e6e6e6;padding:40px;max-width:600px;margin:auto}
-pre{background:#1a1a1e;border:1px solid #2e2e34;border-radius:8px;padding:16px;overflow:auto;color:#ff6b6b;white-space:pre-wrap}
-a{color:#3b82f6}</style></head><body>
-<h2>Function error</h2>
-<pre>${String(msg).replace(/</g,"&lt;")}</pre>
-<p><a href="/">← balik</a></p>
-</body></html>`, 500);
+pre{background:#1a1a1e;border:1px solid #2e2e34;border-radius:8px;padding:16px;overflow:auto;color:#ff6b6b;white-space:pre-wrap}</style>
+</head><body><h2>Function error</h2><pre>${String(msg).replace(/</g,"&lt;")}</pre></body></html>`, 500);
 }
 
 exports.handler = async (event) => {
@@ -176,63 +134,27 @@ exports.handler = async (event) => {
     const path = extractPath(event);
     const ip = (event.headers["x-forwarded-for"] || "").split(",")[0].trim() || "unknown";
 
-    // ---- PING / DEBUG ----
+    // ---- PING ----
     if (path === "ping") {
       return json({ ok: true, path, rawPath: event.path, method: event.method, hasBlobs: !!_store });
     }
 
-    // ---- LOGIN ----
-    if (path === "login" && event.method === "POST") {
-      let d = {};
-      try { d = JSON.parse(event.body || "{}"); } catch (e) {}
-      if (d.password === PASSWORD) {
-        const tok = makeToken();
-        return {
-          statusCode: 200,
-          headers: {
-            "content-type": "application/json",
-            "set-cookie": SESSION_COOKIE + "=" + tok + "; Path=/; HttpOnly; SameSite=Lax; Max-Age=" + (7*24*3600),
-            "access-control-allow-origin": "*",
-          },
-          body: JSON.stringify({ ok: true }),
-        };
-      }
-      return json({ ok: false, reason: "wrong_password" }, 401);
-    }
-
-    // kalau login diakses via GET, kasih tau caranya
-    if (path === "login") {
-      return json({ ok: false, hint: "use POST with JSON body {password:'...'}" }, 405);
-    }
-
-    // ---- LOGOUT ----
-    if (path === "logout") {
-      return {
-        statusCode: 302,
-        headers: {
-          "location": "/",
-          "set-cookie": SESSION_COOKIE + "=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
-        },
-        body: "",
-      };
-    }
-
-    // ---- DASHBOARD ----
-    if (path === "dashboard") {
-      if (!isAuthed(event)) {
-        return html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Login</title>
-<style>body{font:14px system-ui;background:#0e0e10;color:#e6e6e6;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-.c{background:#1a1a1e;border:1px solid #2e2e34;border-radius:12px;padding:28px 32px;max-width:320px;text-align:center}
-h2{margin:0 0 8px;font-size:16px}p{color:#9a9aa2;font-size:13px;margin:0 0 16px}
-a{padding:10px 20px;background:#3b82f6;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;display:inline-block}</style>
-</head><body><div class="c"><h2>Akses ditolak</h2><p>Klik logo di halaman utama untuk masuk.</p><a href="/">← ke halaman utama</a></div></body></html>`);
+    // ---- DASHBOARD RAHASIA ----
+    // URL: /api/track/d/KUNCI_RAHASIA
+    if (path.indexOf("d/") === 0) {
+      const key = path.slice(2);
+      if (key !== SECRET_KEY) {
+        // salah kunci → tampil halaman 404 biasa, nyamar
+        return html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Not Found</title>
+<style>body{font:14px system-ui;background:#0e0e10;color:#888;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}
+h1{font-size:72px;margin:0;color:#333}p{font-size:14px}</style>
+</head><body><div><h1>404</h1><p>Page not found.</p></div></body></html>`, 404);
       }
       const idx = await readIndex(s);
-      const tok = makeToken();
-      return html(renderDash(idx.visits.slice().reverse(), idx.snaps.slice().reverse(), tok));
+      return html(renderDash(idx.visits.slice().reverse(), idx.snaps.slice().reverse(), key));
     }
 
-    // ---- TERIMA DATA ----
+    // ---- TERIMA DATA (publik) ----
     if (path === "collect" && event.method === "POST") {
       let d = {};
       try { d = JSON.parse(event.body || "{}"); } catch (e) {}
@@ -243,7 +165,7 @@ a{padding:10px 20px;background:#3b82f6;color:#fff;text-decoration:none;border-ra
       return { statusCode: 204, body: "" };
     }
 
-    // ---- TERIMA FOTO ----
+    // ---- TERIMA FOTO (publik) ----
     if (path === "snap" && event.method === "POST") {
       const ct = event.headers["content-type"] || "";
       if (ct.indexOf("boundary=") === -1) return json({ error: "no boundary" }, 400);
@@ -265,9 +187,12 @@ a{padding:10px 20px;background:#3b82f6;color:#fff;text-decoration:none;border-ra
       return { statusCode: 204, body: "" };
     }
 
-    // ---- AMBIL FOTO ----
+    // ---- FOTO & DOWNLOAD: cek kunci dari query ?k= ----
+    const url = new URL(event.rawUrl || "https://x" + event.path);
+    const qk = url.searchParams.get("k");
+
     if (path.indexOf("photo/") === 0) {
-      if (!isAuthed(event)) return { statusCode: 403, body: "forbidden" };
+      if (qk !== SECRET_KEY) return { statusCode: 404, body: "not found" };
       const key = path.slice("photo/".length);
       const data = await s.get(key, { type: "arrayBuffer" });
       if (!data) return { statusCode: 404, body: "not found" };
@@ -279,9 +204,8 @@ a{padding:10px 20px;background:#3b82f6;color:#fff;text-decoration:none;border-ra
       };
     }
 
-    // ---- DOWNLOAD ----
     if (path === "download/all.zip") {
-      if (!isAuthed(event)) return { statusCode: 403, body: "forbidden" };
+      if (qk !== SECRET_KEY) return { statusCode: 404, body: "not found" };
       const idx = await readIndex(s);
       const files = [];
       files.push({ name: "data.json", data: Buffer.from(JSON.stringify({
@@ -309,7 +233,7 @@ a{padding:10px 20px;background:#3b82f6;color:#fff;text-decoration:none;border-ra
     }
 
     if (path === "download/data.json") {
-      if (!isAuthed(event)) return { statusCode: 403, body: "forbidden" };
+      if (qk !== SECRET_KEY) return { statusCode: 404, body: "not found" };
       const idx = await readIndex(s);
       return {
         statusCode: 200,
@@ -322,7 +246,7 @@ a{padding:10px 20px;background:#3b82f6;color:#fff;text-decoration:none;border-ra
     }
 
     if (path === "download/photos.zip") {
-      if (!isAuthed(event)) return { statusCode: 403, body: "forbidden" };
+      if (qk !== SECRET_KEY) return { statusCode: 404, body: "not found" };
       const idx = await readIndex(s);
       const files = [];
       for (const p of idx.snaps) {
@@ -349,7 +273,7 @@ a{padding:10px 20px;background:#3b82f6;color:#fff;text-decoration:none;border-ra
   }
 };
 
-function renderDash(v, s, token) {
+function renderDash(v, s, key) {
   const rows = v.length === 0
     ? '<div class="empty">Belum ada data.</div>'
     : '<div class="wrap"><table><tr><th>waktu</th><th>ip</th><th>ua</th><th>screen</th><th>tz</th><th>lang</th><th>baterai</th><th>geo</th><th>ref</th><th>page</th></tr>'
@@ -366,7 +290,7 @@ function renderDash(v, s, token) {
     ? '<div class="empty">Belum ada foto.</div>'
     : '<div class="wrap"><table><tr><th>waktu</th><th>ip</th><th>ukuran</th><th>gambar</th></tr>'
       + s.map(function(r) {
-          var url = "/api/track/photo/" + r.key + "?token=" + token;
+          var url = "/api/track/photo/" + r.key + "?k=" + key;
           return '<tr><td>' + (r.ts||"") + '</td><td>' + (r.ip||"") + '</td><td>' + (r.bytes||0) + ' B</td>'
             + '<td><a href="' + url + '" target="_blank"><img class="shot" src="' + url + '"></a></td></tr>';
         }).join("")
@@ -390,14 +314,13 @@ img.shot{max-width:220px;border:1px solid #333;border-radius:4px;display:block}
 </style></head><body>
 <h1>${v.length} kunjungan &middot; ${s.length} foto</h1>
 <div class="bar">
-  <a href="/api/track/download/all.zip?token=${token}">⬇ Download semua (ZIP)</a>
-  <a class="alt" href="/api/track/download/data.json?token=${token}">⬇ data.json</a>
-  <a class="alt" href="/api/track/download/photos.zip?token=${token}">⬇ foto.zip</a>
-  <a class="alt" href="/dashboard">↻ Refresh</a>
-  <a class="alt" href="/api/track/logout">keluar</a>
+  <a href="/api/track/download/all.zip?k=${key}">⬇ Download semua (ZIP)</a>
+  <a class="alt" href="/api/track/download/data.json?k=${key}">⬇ data.json</a>
+  <a class="alt" href="/api/track/download/photos.zip?k=${key}">⬇ foto.zip</a>
+  <a class="alt" href="/api/track/d/${key}">↻ Refresh</a>
 </div>
 ${rows}
 <h1>Foto (${s.length})</h1>
 ${photoRows}
 </body></html>`;
-    }
+                           }
