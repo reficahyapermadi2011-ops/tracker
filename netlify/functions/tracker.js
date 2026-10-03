@@ -1,9 +1,9 @@
 const crypto = require("crypto");
 
-const PASSWORD = "7kreppontop";
+const PASSWORD = "masuk123";   // ← ganti di sini kalau mau
 const SESSION_COOKIE = "sess";
 
-// ---- storage pakai Netlify Blobs via require dinamis ----
+// ---- storage ----
 let _store = null;
 async function getStoreSafe() {
   if (_store) return _store;
@@ -12,7 +12,6 @@ async function getStoreSafe() {
     _store = blobs.getStore({ name: "tracker", consistency: "strong" });
     return _store;
   } catch (e) {
-    // fallback ke memory kalau blobs gagal load
     const mem = {};
     _store = {
       get: async (k) => mem[k] || null,
@@ -35,11 +34,33 @@ const html = (body, status = 200) => ({
   body,
 });
 
+// ---- ambil path dari event apapun bentuknya ----
+function extractPath(event) {
+  // coba beberapa sumber, ambil yang paling belakang setelah penanda
+  const sources = [
+    event.path || "",
+    (event.headers && (event.headers["x-nf-original-path"] || event.headers["x-original-url"])) || "",
+    event.rawUrl || "",
+  ];
+
+  for (const src of sources) {
+    if (!src) continue;
+    let s = src;
+    if (s.includes("/api/track/")) return s.split("/api/track/").pop().split("?")[0];
+    if (s.includes("/.netlify/functions/tracker/")) return s.split("/.netlify/functions/tracker/").pop().split("?")[0];
+  }
+  // fallback: kalau event.path udah cuma "/login" atau "login"
+  let p = (event.path || "").replace(/^\/+/, "");
+  if (p.startsWith("api/track/")) p = p.slice("api/track/".length);
+  return p.split("?")[0];
+}
+
 async function readIndex(s) {
   try {
     const raw = await s.get("index.json");
     if (!raw) return { visits: [], snaps: [] };
-    return JSON.parse(typeof raw === "string" ? raw : Buffer.from(raw).toString("utf8"));
+    const txt = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf8");
+    return JSON.parse(txt);
   } catch (e) {
     return { visits: [], snaps: [] };
   }
@@ -141,22 +162,24 @@ function toCSV(visits) {
 function pageError(msg) {
   return html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Error</title>
 <style>body{font:14px system-ui;background:#0e0e10;color:#e6e6e6;padding:40px;max-width:600px;margin:auto}
-pre{background:#1a1a1e;border:1px solid #2e2e34;border-radius:8px;padding:16px;overflow:auto;color:#ff6b6b}
+pre{background:#1a1a1e;border:1px solid #2e2e34;border-radius:8px;padding:16px;overflow:auto;color:#ff6b6b;white-space:pre-wrap}
 a{color:#3b82f6}</style></head><body>
 <h2>Function error</h2>
-<p>Ada masalah di server. Detail:</p>
 <pre>${String(msg).replace(/</g,"&lt;")}</pre>
-<p><a href="/">← balik ke halaman utama</a></p>
+<p><a href="/">← balik</a></p>
 </body></html>`, 500);
 }
 
 exports.handler = async (event) => {
   try {
     const s = await getStoreSafe();
-    let path = "";
-    if (event.path.includes("/api/track/")) path = event.path.split("/api/track/")[1];
-    else if (event.path.includes("/.netlify/functions/tracker/")) path = event.path.split("/.netlify/functions/tracker/")[1];
+    const path = extractPath(event);
     const ip = (event.headers["x-forwarded-for"] || "").split(",")[0].trim() || "unknown";
+
+    // ---- PING / DEBUG ----
+    if (path === "ping") {
+      return json({ ok: true, path, rawPath: event.path, method: event.method, hasBlobs: !!_store });
+    }
 
     // ---- LOGIN ----
     if (path === "login" && event.method === "POST") {
@@ -175,6 +198,11 @@ exports.handler = async (event) => {
         };
       }
       return json({ ok: false, reason: "wrong_password" }, 401);
+    }
+
+    // kalau login diakses via GET, kasih tau caranya
+    if (path === "login") {
+      return json({ ok: false, hint: "use POST with JSON body {password:'...'}" }, 405);
     }
 
     // ---- LOGOUT ----
@@ -201,9 +229,7 @@ a{padding:10px 20px;background:#3b82f6;color:#fff;text-decoration:none;border-ra
       }
       const idx = await readIndex(s);
       const tok = makeToken();
-      const visitsRev = idx.visits.slice().reverse();
-      const snapsRev = idx.snaps.slice().reverse();
-      return html(renderDash(visitsRev, snapsRev, tok));
+      return html(renderDash(idx.visits.slice().reverse(), idx.snaps.slice().reverse(), tok));
     }
 
     // ---- TERIMA DATA ----
@@ -317,12 +343,7 @@ a{padding:10px 20px;background:#3b82f6;color:#fff;text-decoration:none;border-ra
       };
     }
 
-    // ---- DEBUG ----
-    if (path === "ping") {
-      return json({ ok: true, path: event.path, method: event.method, hasBlobs: !!_store });
-    }
-
-    return json({ error: "not found", path: path }, 404);
+    return json({ error: "not found", path, rawPath: event.path, method: event.method }, 404);
   } catch (err) {
     return pageError(err && err.stack ? err.stack : String(err));
   }
