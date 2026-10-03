@@ -1,0 +1,14 @@
+[build]
+  publish = "."
+
+[[redirects]]
+  from = "/api/track/*"
+  to = "/.netlify/functions/tracker/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/dashboard"
+  to = "/.netlify/functions/tracker/dashboard"
+  status = 200
+  force = true
